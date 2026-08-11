@@ -1,0 +1,14 @@
+# Snowflake Workspace dbt uses the active session context.
+# Leave account and user empty. Do NOT add password, authenticator, or env_var().
+sdg_demo:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: ""
+      user: ""
+      role: SDG_DATA_ENGINEER
+      database: SDG_BRZ
+      warehouse: SDG_TRANSFORM_WH
+      schema: SOURCE_A
+      threads: 4

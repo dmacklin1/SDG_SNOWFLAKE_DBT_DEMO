@@ -1,0 +1,16 @@
+version: 2
+
+seeds:
+  - name: raw_appointments
+    description: "Source A — raw appointment records as landed from the scheduling system."
+    columns:
+      - name: patient_id
+        tests: [not_null, unique]
+      - name: doctor_id
+        tests: [not_null]
+
+  - name: raw_doctors
+    description: "Source B — raw provider reference data from the HR/credentialing system."
+    columns:
+      - name: doctor_id
+        tests: [not_null, unique]
