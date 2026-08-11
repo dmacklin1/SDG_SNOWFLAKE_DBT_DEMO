@@ -3,13 +3,14 @@
 -- ############################################################################
 --
 -- Run top to bottom in a Snowsight worksheet on a fresh Snowflake trial account.
--- Sections 1-6 are pure Snowflake DDL. Section 7 hands off to the dbt project.
--- Sections 8-11 build the semantic layer and agent on top of what dbt produced.
+-- Sections 1-7 are pure Snowflake DDL. Section 8 hands off to the dbt project.
+-- Sections 9-11 build the semantic layer and agent on top of what dbt produced.
 --
 -- PREREQUISITES
 --   - Snowflake trial account, Enterprise edition
 --   - ACCOUNTADMIN (the default role on a new trial)
 --   - The dbt/ folder from this repo, loaded into a Snowflake Workspace
+--     (no seed files — source data is created by section 7 of this script)
 --
 -- OBJECT NAMING
 --   SDG_BRZ / SDG_SLV / SDG_GLD   medallion layers, one database each
@@ -280,7 +281,126 @@ GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE SDG_DATA_ENGINEER;
 
 
 -- ============================================================================
--- 7. dbt PROJECT 
+-- 7. SOURCE DATA  (landing tables)
+-- ============================================================================
+-- Stands in for what a real ingestion tool would land. At SMA this is Qlik
+-- Replicate CDC writing into BRZ; here it is a DDL + INSERT so nobody has to
+-- stage a file.
+--
+-- Everything lands as VARCHAR, the way a file or CDC feed actually arrives.
+-- Typing is the Bronze layer's job, not the landing zone's — which is why the
+-- casts in BRZ_APPOINTMENTS are real work rather than decoration.
+--
+-- _LOADED_AT defaults at INSERT time and never moves again. That makes it a
+-- genuine landing timestamp that flows unchanged through every downstream
+-- model, instead of a CURRENT_TIMESTAMP() that re-evaluates on every rebuild.
+
+USE ROLE SDG_DATA_ENGINEER;
+USE WAREHOUSE SDG_TRANSFORM_WH;
+
+-- ---- SOURCE A: scheduling system -------------------------------------------
+CREATE OR REPLACE TABLE SDG_BRZ.SOURCE_A.RAW_APPOINTMENTS (
+    PATIENT_ID        VARCHAR(20),
+    PATIENT_NAME      VARCHAR(100),
+    DOCTOR_ID         VARCHAR(10),
+    APPOINTMENT_DATE  VARCHAR(20),
+    STATUS            VARCHAR(20),
+    NOTES             VARCHAR(500),
+    _LOADED_AT        TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_SYSTEM    VARCHAR(20)   DEFAULT 'SOURCE_A'
+)
+COMMENT = 'Raw appointment records as landed from the scheduling system. Untyped by design.';
+
+INSERT INTO SDG_BRZ.SOURCE_A.RAW_APPOINTMENTS
+    (PATIENT_ID, PATIENT_NAME, DOCTOR_ID, APPOINTMENT_DATE, STATUS, NOTES)
+VALUES
+    (1001, 'Marcus Webb', 'D002', '2024-01-15', 'cancelled', 'New patient intake'),
+    (1018, 'Jonas Lindqvist', 'D002', '2024-01-15', 'completed', 'Referral consult'),
+    (1035, 'Hana Suzuki', 'D001', '2024-01-15', 'scheduled', 'Symptom evaluation'),
+    (1002, 'Priya Raman', 'D002', '2024-01-16', 'cancelled', 'Preventive screening'),
+    (1019, 'Rosa Marquez', 'D003', '2024-01-16', 'completed', 'Lab results discussion'),
+    (1036, 'Isaac Levin', 'D003', '2024-01-16', 'cancelled', 'Chronic care check-in'),
+    (1003, 'Tomas Ferreira', 'D002', '2024-01-17', 'completed', 'Lab results discussion'),
+    (1020, 'Devin Ashford', 'D001', '2024-01-17', 'completed', 'New patient intake'),
+    (1037, 'Camille Dubois', 'D003', '2024-01-17', 'completed', 'Post-op check'),
+    (1004, 'Grace Okonkwo', 'D001', '2024-01-18', 'completed', 'New patient intake'),
+    (1021, 'Farida Nasser', 'D003', '2024-01-18', 'completed', 'Medication review'),
+    (1038, 'Nathan Okafor', 'D001', '2024-01-18', 'completed', 'Chronic care check-in'),
+    (1005, 'Liam Doherty', 'D001', '2024-01-19', 'completed', 'Symptom evaluation'),
+    (1022, 'Peter Kowalski', 'D002', '2024-01-19', 'completed', 'Chronic care check-in'),
+    (1039, 'Lucia Ferrari', 'D002', '2024-01-19', 'completed', 'Routine follow-up'),
+    (1006, 'Yuki Tanaka', 'D003', '2024-01-20', 'completed', 'Referral consult'),
+    (1023, 'Anika Sharma', 'D002', '2024-01-20', 'completed', 'Symptom evaluation'),
+    (1040, 'Dmitri Volkov', 'D003', '2024-01-20', 'completed', 'Annual physical'),
+    (1007, 'Aisha Mensah', 'D002', '2024-01-21', 'completed', 'Symptom evaluation'),
+    (1024, 'Bruno Machado', 'D003', '2024-01-21', 'completed', 'Annual physical'),
+    (1041, 'Jasmine Carr', 'D001', '2024-01-21', 'completed', 'Chronic care check-in'),
+    (1008, 'Diego Salazar', 'D001', '2024-01-22', 'completed', 'Medication review'),
+    (1025, 'Sofia Kallio', 'D003', '2024-01-22', 'completed', 'Routine follow-up'),
+    (1042, 'Andres Pinto', 'D003', '2024-01-22', 'completed', 'Post-op check'),
+    (1009, 'Hannah Wexler', 'D002', '2024-01-23', 'completed', 'Post-op check'),
+    (1026, 'Theo Bernard', 'D002', '2024-01-23', 'scheduled', 'Annual physical'),
+    (1043, 'Beatrix Nagy', 'D001', '2024-01-23', 'cancelled', 'Lab results discussion'),
+    (1010, 'Omar Haddad', 'D001', '2024-01-24', 'completed', 'Medication review'),
+    (1027, 'Leila Haddadi', 'D002', '2024-01-24', 'completed', 'Medication review'),
+    (1044, 'Kwame Asante', 'D001', '2024-01-24', 'cancelled', 'Annual physical'),
+    (1011, 'Ingrid Solberg', 'D002', '2024-01-25', 'completed', 'New patient intake'),
+    (1028, 'Gavin Pruitt', 'D002', '2024-01-25', 'completed', 'Medication review'),
+    (1045, 'Sienna Marsh', 'D001', '2024-01-25', 'completed', 'Post-op check'),
+    (1012, 'Rafael Costa', 'D002', '2024-01-26', 'completed', 'Chronic care check-in'),
+    (1029, 'Noor Rahman', 'D002', '2024-01-26', 'completed', 'Referral consult'),
+    (1046, 'Pavel Novak', 'D001', '2024-01-26', 'completed', 'Referral consult'),
+    (1013, 'Nadia Petrov', 'D001', '2024-01-27', 'cancelled', 'Chronic care check-in'),
+    (1030, 'Mateo Rivas', 'D003', '2024-01-27', 'completed', 'Preventive screening'),
+    (1047, 'Talia Grossman', 'D001', '2024-01-27', 'completed', 'Medication review'),
+    (1014, 'Colin Brady', 'D001', '2024-01-28', 'completed', 'Post-op check'),
+    (1031, 'Ellie Sandoval', 'D003', '2024-01-28', 'completed', 'Annual physical'),
+    (1048, 'Ronan Fitzgerald', 'D001', '2024-01-28', 'completed', 'Symptom evaluation'),
+    (1015, 'Mei Ling Zhao', 'D003', '2024-01-29', 'completed', 'Preventive screening'),
+    (1032, 'Viktor Ivanov', 'D003', '2024-01-29', 'scheduled', 'Referral consult'),
+    (1049, 'Mira Chaudhry', 'D001', '2024-01-29', 'completed', 'Routine follow-up'),
+    (1016, 'Samuel Adeyemi', 'D003', '2024-01-30', 'scheduled', 'Referral consult'),
+    (1033, 'Amelia Boateng', 'D002', '2024-01-30', 'completed', 'Referral consult'),
+    (1050, 'Felix Hartmann', 'D003', '2024-01-30', 'completed', 'Post-op check'),
+    (1017, 'Clara Vogt', 'D001', '2024-01-31', 'scheduled', 'Preventive screening'),
+    (1034, 'Rowan Kelly', 'D003', '2024-01-31', 'cancelled', 'Preventive screening');
+
+-- ---- SOURCE B: HR / credentialing system -----------------------------------
+CREATE OR REPLACE TABLE SDG_BRZ.SOURCE_B.RAW_DOCTORS (
+    DOCTOR_ID       VARCHAR(10),
+    DOCTOR_NAME     VARCHAR(100),
+    SPECIALTY       VARCHAR(50),
+    DEPARTMENT      VARCHAR(50),
+    HIRE_DATE       VARCHAR(20),
+    _LOADED_AT      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_SYSTEM  VARCHAR(20)   DEFAULT 'SOURCE_B'
+)
+COMMENT = 'Raw provider reference data as landed from the HR system. Untyped by design.';
+
+INSERT INTO SDG_BRZ.SOURCE_B.RAW_DOCTORS
+    (DOCTOR_ID, DOCTOR_NAME, SPECIALTY, DEPARTMENT, HIRE_DATE)
+VALUES
+    ('D001', 'Dr. Amara Patel', 'Cardiology', 'Internal Medicine', '2016-03-14'),
+    ('D002', 'Dr. Wei Chen', 'Endocrinology', 'Internal Medicine', '2019-07-01'),
+    ('D003', 'Dr. Elena Lopez', 'Family Medicine', 'Primary Care', '2021-01-11');
+
+-- Confirm the landing zone before handing off to dbt.
+SELECT 'SOURCE_A.RAW_APPOINTMENTS' AS table_name, COUNT(*) AS row_count, 50 AS expected
+  FROM SDG_BRZ.SOURCE_A.RAW_APPOINTMENTS
+UNION ALL
+SELECT 'SOURCE_B.RAW_DOCTORS', COUNT(*), 3
+  FROM SDG_BRZ.SOURCE_B.RAW_DOCTORS;
+
+-- Optional: append later-dated rows here to demo the incremental in section 8.
+-- INSERT INTO SDG_BRZ.SOURCE_A.RAW_APPOINTMENTS
+--     (PATIENT_ID, PATIENT_NAME, DOCTOR_ID, APPOINTMENT_DATE, STATUS, NOTES)
+-- VALUES
+--     (1051, 'New Patient One', 'D001', '2024-02-03', 'completed', 'Routine follow-up'),
+--     (1052, 'New Patient Two', 'D003', '2024-02-04', 'scheduled', 'New patient intake');
+
+
+-- ============================================================================
+-- 8. dbt PROJECT 
 -- ============================================================================
 -- Everything from here to section 8 happens in a Snowflake Workspace, not in
 -- this worksheet.
@@ -291,12 +411,15 @@ GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE SDG_DATA_ENGINEER;
 --
 --        dbt build
 --
+-- Expected: 7 models, 31 tests, 0 seeds. All PASS.
 --
--- Expected: 2 seeds, 7 models, 20 tests. All PASS.
+-- The two RAW_ tables from section 7 are declared as dbt SOURCES, not seeds.
+-- dbt reads them, it does not create them — which is how it works anywhere the
+-- data arrives from an ingestion tool rather than a CSV in the repo.
 --
 -- WHAT GETS BUILT
---   SDG_BRZ.SOURCE_A.RAW_APPOINTMENTS            seed    50 rows
---   SDG_BRZ.SOURCE_B.RAW_DOCTORS                 seed     3 rows
+--   (SDG_BRZ.SOURCE_A.RAW_APPOINTMENTS           source, created in section 7)
+--   (SDG_BRZ.SOURCE_B.RAW_DOCTORS                source, created in section 7)
 --   SDG_BRZ.SOURCE_A.BRZ_APPOINTMENTS            view    50
 --   SDG_BRZ.SOURCE_B.BRZ_DOCTORS                 view     3
 --   SDG_SLV.BASE.SLV_BASE_APPOINTMENTS           table   50
@@ -304,9 +427,17 @@ GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE SDG_DATA_ENGINEER;
 --   SDG_SLV.DOCTORS.SLV_DOCTORS                  table    3
 --   SDG_SLV.APPOINTMENTS.SLV_APPOINTMENTS        incr    50
 --   SDG_GLD.ANALYTICS.GLD_DOCTOR_METRICS         table    3
+--
+-- Useful variants once the first build succeeds:
+--   dbt run --select +gld_doctor_metrics     gold and everything upstream
+--   dbt run --select brz_appointments+       that model and everything downstream
+--   dbt run --full-refresh                   rebuild incrementals from scratch
+--
+-- INCREMENTAL DEMO: uncomment the extra INSERT at the end of section 7, run it,
+-- then `dbt build` again. SLV_APPOINTMENTS processes only the two new rows.
 
 -- ============================================================================
--- 8. SEMANTIC VIEW
+-- 9. SEMANTIC VIEW
 -- ============================================================================
 -- The translation layer between column names and business language.
 --
@@ -403,7 +534,7 @@ SHOW SEMANTIC VIEWS IN SCHEMA SDG_GLD.ANALYTICS;
 
 
 -- ============================================================================
--- 9. CORTEX AGENT
+-- 10. CORTEX AGENT
 -- ============================================================================
 -- The agent wraps the semantic view with orchestration and response behaviour.
 -- Registering it with Snowflake Intelligence gives a real chat surface instead
@@ -481,7 +612,7 @@ SHOW AGENTS IN SCHEMA SDG_GLD.ANALYTICS;
 
 
 -- ============================================================================
--- 10. DEMO
+-- 11. DEMO
 -- ============================================================================
 -- Switch to SDG_AI_ANALYST, open Snowflake Intelligence, pick
 -- SDG_APPOINTMENT_ANALYST, and ask these in order.
@@ -514,7 +645,7 @@ SHOW AGENTS IN SCHEMA SDG_GLD.ANALYTICS;
 
 
 -- ============================================================================
--- 11. GIT INTEGRATION  
+-- 12. GIT INTEGRATION  
 -- ============================================================================
 
 USE ROLE ACCOUNTADMIN;
