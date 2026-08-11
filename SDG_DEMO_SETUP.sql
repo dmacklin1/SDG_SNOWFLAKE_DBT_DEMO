@@ -1,0 +1,575 @@
+-- ############################################################################
+-- SDG SNOWFLAKE + dbt + CORTEX DEMO — SINGLE SETUP SCRIPT
+-- ############################################################################
+--
+-- Run top to bottom in a Snowsight worksheet on a fresh Snowflake trial account.
+-- Sections 1-6 are pure Snowflake DDL. Section 7 hands off to the dbt project.
+-- Sections 8-11 build the semantic layer and agent on top of what dbt produced.
+--
+-- PREREQUISITES
+--   - Snowflake trial account, Enterprise edition
+--   - ACCOUNTADMIN (the default role on a new trial)
+--   - The dbt/ folder from this repo, loaded into a Snowflake Workspace
+--
+-- OBJECT NAMING
+--   SDG_BRZ / SDG_SLV / SDG_GLD   medallion layers, one database each
+--   SDG_SYS_CONFIG                 platform objects (dbt project, security policies)
+--
+-- THIS IS A DEMO SCRIPT, NOT A PRODUCTION TEMPLATE.
+-- Single environment, no service accounts, no CI/CD, no key-pair auth.
+-- See section 13 for what changes in a real deployment.
+--
+-- ############################################################################
+
+
+-- ============================================================================
+-- 1. ACCOUNT SETTINGS
+-- ============================================================================
+-- Account-wide defaults. Everything below is inherited by objects created later
+-- unless explicitly overridden.
+
+USE ROLE ACCOUNTADMIN;
+
+ALTER ACCOUNT SET DATA_RETENTION_TIME_IN_DAYS = 1; -- Time travel 
+ALTER ACCOUNT SET STATEMENT_TIMEOUT_IN_SECONDS = 900;
+ALTER ACCOUNT SET CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION';
+
+-- Account-level spend guardrail.
+CREATE RESOURCE MONITOR IF NOT EXISTS SDG_ACCT_MONITOR
+    WITH CREDIT_QUOTA   = 50
+         FREQUENCY      = MONTHLY
+         START_TIMESTAMP = IMMEDIATELY
+         TRIGGERS
+             ON 50  PERCENT DO NOTIFY
+             ON 90  PERCENT DO NOTIFY
+             ON 100 PERCENT DO SUSPEND;
+
+ALTER ACCOUNT SET RESOURCE_MONITOR = SDG_ACCT_MONITOR;
+
+
+-- ============================================================================
+-- 2. ROLES
+-- ============================================================================
+--     SYSADMIN
+--        └── SDG_DATA_ENGINEER      build and own objects
+--              ├── SDG_DATA_ANALYST  read the medallion layers
+--              └── SDG_AI_ANALYST    consume the semantic view and agent
+
+USE ROLE USERADMIN;
+
+CREATE ROLE IF NOT EXISTS SDG_DATA_ANALYST COMMENT = 'Read-only access across the medallion layers';
+CREATE ROLE IF NOT EXISTS SDG_DATA_ENGINEER COMMENT = 'Builds and owns all data objects; runs dbt';
+CREATE ROLE IF NOT EXISTS SDG_AI_ANALYST COMMENT = 'Consumes the Gold semantic view and Cortex agent';
+
+USE ROLE SECURITYADMIN;
+
+GRANT ROLE SDG_DATA_ANALYST  TO ROLE SDG_DATA_ENGINEER;
+GRANT ROLE SDG_AI_ANALYST    TO ROLE SDG_DATA_ENGINEER;
+GRANT ROLE SDG_DATA_ENGINEER TO ROLE SYSADMIN;
+
+-- ============================================================================
+-- 3. WAREHOUSES & RESOURCE MONITORS
+-- ============================================================================
+USE ROLE SYSADMIN;
+
+CREATE WAREHOUSE IF NOT EXISTS SDG_TRANSFORM_WH
+    WITH WAREHOUSE_SIZE = 'X-SMALL'
+         AUTO_SUSPEND         = 60
+         AUTO_RESUME          = TRUE
+         INITIALLY_SUSPENDED  = TRUE
+         COMMENT = 'dbt transformations across BRZ / SLV / GLD';
+
+CREATE WAREHOUSE IF NOT EXISTS SDG_AI_WH
+    WITH WAREHOUSE_SIZE = 'X-SMALL'
+         AUTO_SUSPEND         = 60
+         AUTO_RESUME          = TRUE
+         INITIALLY_SUSPENDED  = TRUE
+         COMMENT = 'Cortex Analyst / agent query execution';
+
+USE ROLE ACCOUNTADMIN;
+
+CREATE RESOURCE MONITOR IF NOT EXISTS SDG_TRANSFORM_WH_MONITOR
+    WITH CREDIT_QUOTA = 20 FREQUENCY = MONTHLY START_TIMESTAMP = IMMEDIATELY
+         TRIGGERS ON 80 PERCENT DO NOTIFY
+                  ON 100 PERCENT DO SUSPEND;
+
+CREATE RESOURCE MONITOR IF NOT EXISTS SDG_AI_WH_MONITOR
+    WITH CREDIT_QUOTA = 10 FREQUENCY = MONTHLY START_TIMESTAMP = IMMEDIATELY
+         TRIGGERS ON 80 PERCENT DO NOTIFY
+                  ON 100 PERCENT DO SUSPEND;
+
+ALTER WAREHOUSE SDG_TRANSFORM_WH SET RESOURCE_MONITOR = SDG_TRANSFORM_WH_MONITOR;
+ALTER WAREHOUSE SDG_AI_WH        SET RESOURCE_MONITOR = SDG_AI_WH_MONITOR;
+
+USE ROLE SECURITYADMIN;
+
+GRANT USAGE ON WAREHOUSE SDG_TRANSFORM_WH TO ROLE SDG_DATA_ANALYST;
+GRANT USAGE ON WAREHOUSE SDG_TRANSFORM_WH TO ROLE SDG_DATA_ENGINEER;
+GRANT USAGE ON WAREHOUSE SDG_AI_WH        TO ROLE SDG_AI_ANALYST;
+GRANT USAGE ON WAREHOUSE SDG_AI_WH        TO ROLE SDG_DATA_ENGINEER;
+
+
+-- ============================================================================
+-- 4. DATABASES & SCHEMAS
+-- ============================================================================
+-- One database per medallion layer. Schemas inside each layer carry meaning:
+--
+--   SDG_BRZ         SOURCE_A       raw landing from the scheduling system
+--                   SOURCE_B       raw landing from the HR / credentialing system
+--   SDG_SLV         BASE           1:1 cleaned records, surrogate-keyed
+--                   DOCTORS        conformed provider dimension
+--                   APPOINTMENTS   conformed appointment fact
+--   SDG_GLD         ANALYTICS      consumption-ready aggregates
+--   SDG_SYS_CONFIG  DBT            dbt project object
+--                   SECURITY       password and authentication policies
+--
+-- BRZ is organised by SOURCE. SLV is organised by SUBJECT. GLD by END CONSUMPTION.
+
+USE ROLE SYSADMIN;
+
+CREATE DATABASE IF NOT EXISTS SDG_BRZ        COMMENT = 'Bronze — raw landing, organised by source system';
+CREATE DATABASE IF NOT EXISTS SDG_SLV        COMMENT = 'Silver — cleaned and conformed, organised by subject';
+CREATE DATABASE IF NOT EXISTS SDG_GLD        COMMENT = 'Gold — consumption-ready aggregates';
+CREATE DATABASE IF NOT EXISTS SDG_SYS_CONFIG COMMENT = 'Platform configuration and security objects';
+
+ALTER DATABASE SDG_BRZ        SET DATA_RETENTION_TIME_IN_DAYS = 1;
+ALTER DATABASE SDG_SLV        SET DATA_RETENTION_TIME_IN_DAYS = 1;
+ALTER DATABASE SDG_GLD        SET DATA_RETENTION_TIME_IN_DAYS = 1;
+ALTER DATABASE SDG_SYS_CONFIG SET DATA_RETENTION_TIME_IN_DAYS = 1;
+
+CREATE SCHEMA IF NOT EXISTS SDG_BRZ.SOURCE_A;
+CREATE SCHEMA IF NOT EXISTS SDG_BRZ.SOURCE_B;
+
+CREATE SCHEMA IF NOT EXISTS SDG_SLV.BASE;
+CREATE SCHEMA IF NOT EXISTS SDG_SLV.DOCTORS;
+CREATE SCHEMA IF NOT EXISTS SDG_SLV.APPOINTMENTS;
+
+CREATE SCHEMA IF NOT EXISTS SDG_GLD.ANALYTICS;
+
+CREATE SCHEMA IF NOT EXISTS SDG_SYS_CONFIG.DBT;
+CREATE SCHEMA IF NOT EXISTS SDG_SYS_CONFIG.SECURITY;
+
+
+-- ============================================================================
+-- 5. SECURITY POLICIES  (CREATED, DELIBERATELY NOT APPLIED)
+-- ============================================================================
+-- These are the policy objects a real deployment attaches to users. They are created here so you can see and discuss the shape of them.
+-- >>> DO NOT UNCOMMENT THE ALTER USER STATEMENTS ON A DEMO ACCOUNT. <<<
+
+
+USE ROLE SYSADMIN;
+GRANT USAGE ON DATABASE SDG_SYS_CONFIG                        TO ROLE SECURITYADMIN;
+GRANT USAGE ON SCHEMA   SDG_SYS_CONFIG.SECURITY               TO ROLE SECURITYADMIN;
+GRANT CREATE PASSWORD POLICY       ON SCHEMA SDG_SYS_CONFIG.SECURITY TO ROLE SECURITYADMIN;
+GRANT CREATE AUTHENTICATION POLICY ON SCHEMA SDG_SYS_CONFIG.SECURITY TO ROLE SECURITYADMIN;
+
+USE ROLE SECURITYADMIN;
+
+CREATE PASSWORD POLICY IF NOT EXISTS SDG_SYS_CONFIG.SECURITY.SDG_PASSWORD_POLICY
+    PASSWORD_MIN_LENGTH        = 12
+    PASSWORD_MAX_AGE_DAYS      = 90
+    PASSWORD_MAX_RETRIES       = 5
+    PASSWORD_LOCKOUT_TIME_MINS = 30
+    COMMENT = 'Human user password standard';
+
+CREATE AUTHENTICATION POLICY IF NOT EXISTS SDG_SYS_CONFIG.SECURITY.PERSON_AUTH_POLICY
+    AUTHENTICATION_METHODS = ('SAML', 'PASSWORD')
+    CLIENT_TYPES           = ('SNOWFLAKE_UI', 'SNOWSQL', 'DRIVERS')
+    MFA_ENROLLMENT         = REQUIRED
+    COMMENT = 'Human users: SSO or password, MFA mandatory';
+
+CREATE AUTHENTICATION POLICY IF NOT EXISTS SDG_SYS_CONFIG.SECURITY.SERVICE_ACCOUNT_KEYPAIR_POLICY
+    AUTHENTICATION_METHODS = ('KEYPAIR')
+    CLIENT_TYPES           = ('DRIVERS', 'SNOWSQL')
+    MFA_ENROLLMENT         = OPTIONAL
+    COMMENT = 'Service accounts: key-pair only, no interactive login';
+
+-- Production only. Left commented on purpose.
+-- ALTER USER <human_user>   SET AUTHENTICATION POLICY SDG_SYS_CONFIG.SECURITY.PERSON_AUTH_POLICY;
+-- ALTER USER <service_user> SET AUTHENTICATION POLICY SDG_SYS_CONFIG.SECURITY.SERVICE_ACCOUNT_KEYPAIR_POLICY;
+
+
+-- ============================================================================
+-- 6. GRANTS
+-- ============================================================================
+-- ALL + FUTURE on every object class. FUTURE is what stops the "dbt created a
+-- new model and now the analyst can't see it" support ticket.
+
+USE ROLE SECURITYADMIN;
+
+-- ---- ANALYST: read-only across all three layers ----------------------------
+GRANT USAGE ON DATABASE SDG_BRZ TO ROLE SDG_DATA_ANALYST;
+GRANT USAGE ON DATABASE SDG_SLV TO ROLE SDG_DATA_ANALYST;
+GRANT USAGE ON DATABASE SDG_GLD TO ROLE SDG_DATA_ANALYST;
+
+GRANT USAGE  ON ALL SCHEMAS    IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ANALYST;
+GRANT USAGE  ON ALL SCHEMAS    IN DATABASE SDG_SLV TO ROLE SDG_DATA_ANALYST;
+GRANT USAGE  ON ALL SCHEMAS    IN DATABASE SDG_GLD TO ROLE SDG_DATA_ANALYST;
+GRANT USAGE  ON FUTURE SCHEMAS IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ANALYST;
+GRANT USAGE  ON FUTURE SCHEMAS IN DATABASE SDG_SLV TO ROLE SDG_DATA_ANALYST;
+GRANT USAGE  ON FUTURE SCHEMAS IN DATABASE SDG_GLD TO ROLE SDG_DATA_ANALYST;
+
+GRANT SELECT ON ALL TABLES     IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ANALYST;
+GRANT SELECT ON ALL TABLES     IN DATABASE SDG_SLV TO ROLE SDG_DATA_ANALYST;
+GRANT SELECT ON ALL TABLES     IN DATABASE SDG_GLD TO ROLE SDG_DATA_ANALYST;
+GRANT SELECT ON FUTURE TABLES  IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ANALYST;
+GRANT SELECT ON FUTURE TABLES  IN DATABASE SDG_SLV TO ROLE SDG_DATA_ANALYST;
+GRANT SELECT ON FUTURE TABLES  IN DATABASE SDG_GLD TO ROLE SDG_DATA_ANALYST;
+
+GRANT SELECT ON ALL VIEWS      IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ANALYST;
+GRANT SELECT ON ALL VIEWS      IN DATABASE SDG_SLV TO ROLE SDG_DATA_ANALYST;
+GRANT SELECT ON ALL VIEWS      IN DATABASE SDG_GLD TO ROLE SDG_DATA_ANALYST;
+GRANT SELECT ON FUTURE VIEWS   IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ANALYST;
+GRANT SELECT ON FUTURE VIEWS   IN DATABASE SDG_SLV TO ROLE SDG_DATA_ANALYST;
+GRANT SELECT ON FUTURE VIEWS   IN DATABASE SDG_GLD TO ROLE SDG_DATA_ANALYST;
+
+-- ---- ENGINEER: build rights (inherits all analyst reads) --------------------
+GRANT CREATE SCHEMA ON DATABASE SDG_BRZ        TO ROLE SDG_DATA_ENGINEER;
+GRANT CREATE SCHEMA ON DATABASE SDG_SLV        TO ROLE SDG_DATA_ENGINEER;
+GRANT CREATE SCHEMA ON DATABASE SDG_GLD        TO ROLE SDG_DATA_ENGINEER;
+GRANT CREATE SCHEMA ON DATABASE SDG_SYS_CONFIG TO ROLE SDG_DATA_ENGINEER;
+
+GRANT USAGE ON DATABASE SDG_SYS_CONFIG                  TO ROLE SDG_DATA_ENGINEER;
+GRANT USAGE ON ALL SCHEMAS    IN DATABASE SDG_SYS_CONFIG TO ROLE SDG_DATA_ENGINEER;
+GRANT USAGE ON FUTURE SCHEMAS IN DATABASE SDG_SYS_CONFIG TO ROLE SDG_DATA_ENGINEER;
+GRANT ALL   ON SCHEMA SDG_SYS_CONFIG.DBT                 TO ROLE SDG_DATA_ENGINEER;
+
+GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
+      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK
+    ON ALL SCHEMAS IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ENGINEER;
+GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
+      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK
+    ON ALL SCHEMAS IN DATABASE SDG_SLV TO ROLE SDG_DATA_ENGINEER;
+GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
+      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK,
+      CREATE SEMANTIC VIEW
+    ON ALL SCHEMAS IN DATABASE SDG_GLD TO ROLE SDG_DATA_ENGINEER;
+
+GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
+      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK
+    ON FUTURE SCHEMAS IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ENGINEER;
+GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
+      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK
+    ON FUTURE SCHEMAS IN DATABASE SDG_SLV TO ROLE SDG_DATA_ENGINEER;
+GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
+      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK,
+      CREATE SEMANTIC VIEW
+    ON FUTURE SCHEMAS IN DATABASE SDG_GLD TO ROLE SDG_DATA_ENGINEER;
+
+GRANT INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES    IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ENGINEER;
+GRANT INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES    IN DATABASE SDG_SLV TO ROLE SDG_DATA_ENGINEER;
+GRANT INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES    IN DATABASE SDG_GLD TO ROLE SDG_DATA_ENGINEER;
+GRANT INSERT, UPDATE, DELETE, TRUNCATE ON FUTURE TABLES IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ENGINEER;
+GRANT INSERT, UPDATE, DELETE, TRUNCATE ON FUTURE TABLES IN DATABASE SDG_SLV TO ROLE SDG_DATA_ENGINEER;
+GRANT INSERT, UPDATE, DELETE, TRUNCATE ON FUTURE TABLES IN DATABASE SDG_GLD TO ROLE SDG_DATA_ENGINEER;
+
+-- ---- AI ANALYST: Gold only, plus semantic view references -------------------
+GRANT USAGE  ON DATABASE SDG_GLD                                  TO ROLE SDG_AI_ANALYST;
+GRANT USAGE  ON SCHEMA   SDG_GLD.ANALYTICS                        TO ROLE SDG_AI_ANALYST;
+GRANT SELECT ON ALL TABLES    IN SCHEMA SDG_GLD.ANALYTICS         TO ROLE SDG_AI_ANALYST;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA SDG_GLD.ANALYTICS         TO ROLE SDG_AI_ANALYST;
+
+USE ROLE ACCOUNTADMIN;
+GRANT REFERENCES, SELECT ON ALL SEMANTIC VIEWS    IN SCHEMA SDG_GLD.ANALYTICS TO ROLE SDG_AI_ANALYST;
+GRANT REFERENCES, SELECT ON FUTURE SEMANTIC VIEWS IN SCHEMA SDG_GLD.ANALYTICS TO ROLE SDG_AI_ANALYST;
+
+-- Cortex access. CORTEX_USER is granted to PUBLIC by default on most accounts,
+-- but grant it explicitly so the role is self-describing.
+GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE SDG_AI_ANALYST;
+GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE SDG_DATA_ENGINEER;
+
+
+-- ============================================================================
+-- 7. dbt PROJECT 
+-- ============================================================================
+-- Everything from here to section 8 happens in a Snowflake Workspace, not in
+-- this worksheet.
+--
+--   1. Projects -> Workspaces -> + Workspace
+--   2. Add the contents of the dbt/ folder from this repo
+--   3. Open the terminal and run:
+--
+--        dbt build
+--
+--
+-- Expected: 2 seeds, 7 models, 20 tests. All PASS.
+--
+-- WHAT GETS BUILT
+--   SDG_BRZ.SOURCE_A.RAW_APPOINTMENTS            seed    50 rows
+--   SDG_BRZ.SOURCE_B.RAW_DOCTORS                 seed     3 rows
+--   SDG_BRZ.SOURCE_A.BRZ_APPOINTMENTS            view    50
+--   SDG_BRZ.SOURCE_B.BRZ_DOCTORS                 view     3
+--   SDG_SLV.BASE.SLV_BASE_APPOINTMENTS           table   50
+--   SDG_SLV.BASE.SLV_BASE_DOCTORS                table    3
+--   SDG_SLV.DOCTORS.SLV_DOCTORS                  table    3
+--   SDG_SLV.APPOINTMENTS.SLV_APPOINTMENTS        incr    50
+--   SDG_GLD.ANALYTICS.GLD_DOCTOR_METRICS         table    3
+
+-- ============================================================================
+-- 8. SEMANTIC VIEW
+-- ============================================================================
+-- The translation layer between column names and business language.
+--
+-- The COMMENT on each field is not documentation — it is the prompt. Cortex
+-- Analyst reads these to decide which column answers a question. Vague comments
+-- produce wrong SQL. This is where most of the accuracy work actually happens.
+--
+-- Note the two rate metrics below. They answer the same English question and
+-- return different numbers. Defining both, explicitly, is the job.
+
+USE ROLE SDG_DATA_ENGINEER;
+USE WAREHOUSE SDG_TRANSFORM_WH;
+
+CREATE OR REPLACE SEMANTIC VIEW SDG_GLD.ANALYTICS.SDG_DOCTOR_PERFORMANCE
+
+  TABLES (
+    doctor_metrics AS SDG_GLD.ANALYTICS.GLD_DOCTOR_METRICS
+      PRIMARY KEY (doctor_id)
+      COMMENT = 'One row per provider. Aggregated appointment activity for a single
+                 clinic over January 2024, joined to provider reference data
+                 (specialty, department). Grain: one row per doctor_id.'
+  )
+
+  DIMENSIONS (
+    doctor_metrics.doctor_id AS doctor_id
+      COMMENT = 'Provider identifier from the HR system. Format Dnnn.',
+    doctor_metrics.doctor_name AS doctor_name
+      WITH SYNONYMS = ('doctor', 'physician', 'provider', 'clinician', 'name')
+      COMMENT = 'Full display name of the attending provider, e.g. "Dr. Wei Chen".
+                 Use this when a user names a doctor.',
+    doctor_metrics.specialty AS specialty
+      WITH SYNONYMS = ('specialty', 'speciality', 'practice area')
+      COMMENT = 'Clinical specialty, e.g. Cardiology, Endocrinology, Family Medicine.',
+    doctor_metrics.department AS department
+      WITH SYNONYMS = ('department', 'division', 'service line')
+      COMMENT = 'Organisational department the provider reports into.'
+  )
+
+  FACTS (
+    doctor_metrics.total_appointments AS total_appointments
+      COMMENT = 'COUNT (integer, not a rate): total appointments booked with this
+                 provider, all statuses included.',
+    doctor_metrics.completed AS completed
+      COMMENT = 'COUNT (integer): appointments with status = completed.',
+    doctor_metrics.cancelled AS cancelled
+      COMMENT = 'COUNT (integer): appointments with status = cancelled.',
+    doctor_metrics.scheduled AS scheduled
+      COMMENT = 'COUNT (integer): appointments still in scheduled status, not yet
+                 completed or cancelled.',
+    doctor_metrics.completion_rate_pct AS completion_rate_pct
+      COMMENT = 'PERCENTAGE 0-100 for THIS PROVIDER ONLY: completed / total * 100.
+                 Already a percentage — never multiply by 100 again. Do NOT average
+                 this column across providers to get an overall rate; use the
+                 overall_completion_rate_pct metric instead.',
+    doctor_metrics.cancellation_rate_pct AS cancellation_rate_pct
+      COMMENT = 'PERCENTAGE 0-100 for THIS PROVIDER ONLY: cancelled / total * 100.
+                 Already a percentage. Same averaging caveat as completion_rate_pct.',
+    doctor_metrics.active_days AS active_days
+      COMMENT = 'COUNT (integer): distinct calendar days on which this provider had
+                 at least one appointment.',
+    doctor_metrics.avg_appointments_per_day AS avg_appointments_per_day
+      COMMENT = 'RATIO (not a percentage): total_appointments / active_days. A rough
+                 daily workload indicator.'
+  )
+
+  METRICS (
+    total_appointment_count AS SUM(doctor_metrics.total_appointments)
+      COMMENT = 'Total appointments across all providers in scope.',
+    total_completed AS SUM(doctor_metrics.completed)
+      COMMENT = 'Total completed appointments across all providers in scope.',
+    total_cancelled AS SUM(doctor_metrics.cancelled)
+      COMMENT = 'Total cancelled appointments across all providers in scope.',
+    overall_completion_rate_pct AS
+        SUM(doctor_metrics.completed) / NULLIF(SUM(doctor_metrics.total_appointments), 0) * 100
+      COMMENT = 'THE DEFAULT ANSWER for "what is our completion rate" or any question
+                 about the clinic overall. Volume-weighted: total completed divided by
+                 total appointments. Use this metric, not an average of the per-provider
+                 completion_rate_pct column.',
+    overall_cancellation_rate_pct AS
+        SUM(doctor_metrics.cancelled) / NULLIF(SUM(doctor_metrics.total_appointments), 0) * 100
+      COMMENT = 'THE DEFAULT ANSWER for "what is our cancellation rate" overall.
+                 Volume-weighted.',
+    avg_doctor_completion_rate_pct AS AVG(doctor_metrics.completion_rate_pct)
+      COMMENT = 'UNWEIGHTED mean of the per-provider completion rates. Every provider
+                 counts equally regardless of how many appointments they had. Only use
+                 this when the user explicitly asks about the typical or average DOCTOR,
+                 not about the clinic overall. For clinic-wide questions use
+                 overall_completion_rate_pct.'
+  )
+
+  COMMENT = 'Provider performance for natural language querying via Cortex Analyst.';
+
+SHOW SEMANTIC VIEWS IN SCHEMA SDG_GLD.ANALYTICS;
+
+
+-- ============================================================================
+-- 9. CORTEX AGENT
+-- ============================================================================
+-- The agent wraps the semantic view with orchestration and response behaviour.
+-- Registering it with Snowflake Intelligence gives a real chat surface instead
+-- of parsing JSON out of a worksheet.
+
+CREATE OR REPLACE AGENT SDG_GLD.ANALYTICS.SDG_APPOINTMENT_ANALYST
+  COMMENT = 'Answers natural language questions about provider appointment performance'
+  FROM SPECIFICATION $$
+models:
+  orchestration: auto
+
+instructions:
+  response: |
+    You are an appointment analytics assistant for a clinic operations team.
+    Answer questions about provider workload, completion rates, cancellations,
+    and scheduling patterns.
+
+    1. Always give specific numbers. Never say "high" or "low" without the figure.
+    2. State percentages to one decimal place and include the % sign.
+    3. When a question is about the clinic OVERALL, use overall_completion_rate_pct
+       or overall_cancellation_rate_pct. Do not average the per-provider rate columns.
+    4. When comparing providers, show the underlying appointment volumes alongside
+       the rates — a 100% completion rate on 2 appointments is not comparable to
+       92% on 500.
+    5. Flag concerning patterns without being asked: cancellation rates above 15%,
+       or a workload spread where one provider carries more than 40% of volume.
+    6. The dataset covers a single clinic for January 2024 only. If asked about
+       trends over time, other periods, or patient-level detail, say plainly that
+       the data does not support it rather than inferring.
+    7. Be concise. Lead with the answer, then the supporting numbers.
+
+  orchestration: |
+    Prefer a single query with ORDER BY and LIMIT for "top N", "highest", "lowest",
+    and "most/least" questions. Do not run multiple passes and reconcile them.
+
+tools:
+  - tool_spec:
+      type: cortex_analyst_text_to_sql
+      name: DoctorPerformance
+      description: >
+        SDG_DOCTOR_PERFORMANCE (SDG_GLD.ANALYTICS):
+        - Grain: one row per provider (doctor_id). Three providers, January 2024.
+        - DIMENSIONS: doctor_id, doctor_name, specialty, department.
+        - COUNTS (integers): total_appointments, completed, cancelled, scheduled,
+          active_days.
+        - PER-PROVIDER RATES (already 0-100 percentages): completion_rate_pct,
+          cancellation_rate_pct. Do not multiply by 100. Do not average across rows.
+        - CLINIC-WIDE METRICS: overall_completion_rate_pct and
+          overall_cancellation_rate_pct are volume-weighted and are the correct
+          answer for any question about the clinic as a whole.
+          avg_doctor_completion_rate_pct is unweighted and only answers questions
+          about the typical individual doctor.
+        - RATIO: avg_appointments_per_day is appointments per active day, not a
+          percentage.
+
+tool_resources:
+  DoctorPerformance:
+    execution_environment:
+      type: warehouse
+      warehouse: SDG_AI_WH
+    semantic_view: SDG_GLD.ANALYTICS.SDG_DOCTOR_PERFORMANCE
+$$;
+
+-- Register with Snowflake Intelligence and grant to the consumption role.
+USE ROLE ACCOUNTADMIN;
+ALTER SNOWFLAKE INTELLIGENCE SNOWFLAKE_INTELLIGENCE_OBJECT_DEFAULT
+    ADD AGENT SDG_GLD.ANALYTICS.SDG_APPOINTMENT_ANALYST;
+
+GRANT USAGE ON SNOWFLAKE INTELLIGENCE SNOWFLAKE_INTELLIGENCE_OBJECT_DEFAULT
+    TO ROLE SDG_AI_ANALYST;
+GRANT USAGE ON AGENT SDG_GLD.ANALYTICS.SDG_APPOINTMENT_ANALYST
+    TO ROLE SDG_AI_ANALYST;
+
+SHOW AGENTS IN SCHEMA SDG_GLD.ANALYTICS;
+
+
+-- ============================================================================
+-- 10. DEMO
+-- ============================================================================
+-- Switch to SDG_AI_ANALYST, open Snowflake Intelligence, pick
+-- SDG_APPOINTMENT_ANALYST, and ask these in order.
+--
+--   1. "Which doctor has the highest completion rate?"
+--        Warm-up. Confirms the agent resolves names and rates.
+--
+--   2. "What is our overall completion rate?"
+--        The one that matters. Should return the volume-weighted figure, not
+--        the average of the three per-doctor rates. Ask it to show the SQL.
+--
+--   3. "Compare workload across all three doctors."
+--        Exercises the "show volumes alongside rates" instruction.
+--
+--   4. "Which department has the most cancellations?"
+--        Proves the Source B join is real — department only exists because
+--        Silver conformed two separate sources.
+--
+--   5. "What was the trend in appointments over the last two years?"
+--        Should decline, citing the January 2024 scope. This is the segment
+--        worth planning for: refusing to fabricate is the trust demo.
+--
+-- Note the role you are running as. Try SDG_AI_ANALYST and confirm it cannot
+-- read Bronze or Silver — the agent inherits the caller's privileges, which is
+-- the whole governance story in one query:
+--
+--   USE ROLE SDG_AI_ANALYST;
+--   SELECT * FROM SDG_SLV.APPOINTMENTS.SLV_APPOINTMENTS LIMIT 1;   -- fails
+--   SELECT * FROM SDG_GLD.ANALYTICS.GLD_DOCTOR_METRICS LIMIT 1;    -- works
+
+
+-- ============================================================================
+-- 11. GIT INTEGRATION  
+-- ============================================================================
+
+USE ROLE ACCOUNTADMIN;
+
+CREATE SCHEMA IF NOT EXISTS SDG_SYS_CONFIG.SECRETS;
+
+CREATE SECRET IF NOT EXISTS SDG_SYS_CONFIG.SECRETS.SDG_GIT_SECRET
+    TYPE     = PASSWORD
+    USERNAME = 'dmacklin1'
+    PASSWORD = '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'; -- fine-grained read-only to empty and public repo
+
+CREATE API INTEGRATION IF NOT EXISTS SDG_GIT_API
+    API_PROVIDER = GIT_HTTPS_API
+    API_ALLOWED_PREFIXES = ('github.com/dmacklin1/SDG_SNOWFLAKE_DBT_DEMO/')
+    ALLOWED_AUTHENTICATION_SECRETS = (SDG_SYS_CONFIG.SECRETS.SDG_GIT_SECRET)
+    ENABLED = TRUE;
+
+CREATE GIT REPOSITORY IF NOT EXISTS SDG_SYS_CONFIG.DBT.SDG_DEMO_REPO
+    API_INTEGRATION = SDG_GIT_API
+    GIT_CREDENTIALS = SDG_SYS_CONFIG.SECRETS.SDG_GIT_SECRET
+    ORIGIN          = 'https://github.com/dmacklin1/SDG_SNOWFLAKE_DBT_DEMO.git';
+
+ALTER GIT REPOSITORY SDG_SYS_CONFIG.DBT.SDG_DEMO_REPO FETCH;
+
+-- The dbt project as a first-class, versioned Snowflake object.
+CREATE OR REPLACE DBT PROJECT SDG_SYS_CONFIG.DBT.SDG_DEMO
+    FROM '@SDG_SYS_CONFIG.DBT.SDG_DEMO_REPO/branches/main/dbt/'
+    DBT_VERSION = '1.9.4'
+    COMMENT     = 'SDG demo pipeline';
+
+EXECUTE DBT PROJECT SDG_SYS_CONFIG.DBT.SDG_DEMO ARGS = 'build';
+
+SHOW VERSIONS IN DBT PROJECT SDG_SYS_CONFIG.DBT.SDG_DEMO;
+
+-- And scheduled, which is the natural close.
+CREATE OR REPLACE TASK SDG_SYS_CONFIG.DBT.RUN_SDG_DEMO_DAILY
+    WAREHOUSE = SDG_TRANSFORM_WH
+    SCHEDULE  = 'USING CRON 0 6 * * * America/New_York'
+AS
+    EXECUTE DBT PROJECT SDG_SYS_CONFIG.DBT.SDG_DEMO ARGS = 'build';
+
+ALTER TASK SDG_SYS_CONFIG.DBT.RUN_SDG_DEMO_DAILY RESUME;
+
+-- ============================================================================
+-- 13. WHAT CHANGES IN PRODUCTION
+-- ============================================================================
+-- Talking points, not runnable code. The gap between this script and a real
+-- deployment is roughly:
+--
+--   ENVIRONMENTS   DEV / TST / PRD prefixes on every database, warehouse, and
+--                  role. Same script, driven by a config block at the top.
+--   SERVICE ACCTS  TYPE = SERVICE users with RSA key-pair auth for CI/CD.
+--                  Never a password in a script, never a password in git.
+--   AUTH POLICIES  Section 5 policies actually applied to users or SSO.
+--   CI/CD          GitHub Actions running dbt against TST on PR, PRD on merge,
+--                  with a prod guard macro blocking manual runs.
+--   NETWORK        Network policies restricting service accounts to known IPs.
+--   ENV PARITY     Zero-copy clone from PRD to refresh DEV and TST cheaply.
