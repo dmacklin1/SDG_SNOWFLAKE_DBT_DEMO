@@ -3,7 +3,6 @@ version: '1.0.0'
 profile: 'sdg_demo'
 
 model-paths:  ["models"]
-seed-paths:   ["seeds"]
 test-paths:   ["tests"]
 macro-paths:  ["macros"]
 
@@ -13,21 +12,14 @@ clean-targets:
 
 # NOTE: no packages.yml by design. dbt deps requires external network access,
 # which is not available on Snowflake trial accounts.
-
-seeds:
-  sdg_demo:
-    +quote_columns: false
-    source_a:
-      +database: SDG_BRZ
-      +schema: SOURCE_A
-    source_b:
-      +database: SDG_BRZ
-      +schema: SOURCE_B
+#
+# No seeds either. The two RAW_ landing tables are declared as sources in
+# models/brz/sources.yml and created by section 7 of SDG_DEMO_SETUP.sql.
 
 models:
   sdg_demo:
     brz:
-      +materialized: view
+      +materialized: table
       source_a:
         +database: SDG_BRZ
         +schema: SOURCE_A

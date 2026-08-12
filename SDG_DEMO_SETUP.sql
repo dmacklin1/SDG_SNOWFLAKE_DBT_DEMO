@@ -62,7 +62,7 @@ CREATE ROLE IF NOT EXISTS SDG_DATA_ANALYST COMMENT = 'Read-only access across th
 CREATE ROLE IF NOT EXISTS SDG_DATA_ENGINEER COMMENT = 'Builds and owns all data objects; runs dbt';
 CREATE ROLE IF NOT EXISTS SDG_AI_ANALYST COMMENT = 'Consumes the Gold semantic view and Cortex agent';
 
-USE ROLE SECURITYADMIN;
+USE ROLE SYSADMIN;
 
 GRANT ROLE SDG_DATA_ANALYST  TO ROLE SDG_DATA_ENGINEER;
 GRANT ROLE SDG_AI_ANALYST    TO ROLE SDG_DATA_ENGINEER;
@@ -102,7 +102,7 @@ CREATE RESOURCE MONITOR IF NOT EXISTS SDG_AI_WH_MONITOR
 ALTER WAREHOUSE SDG_TRANSFORM_WH SET RESOURCE_MONITOR = SDG_TRANSFORM_WH_MONITOR;
 ALTER WAREHOUSE SDG_AI_WH        SET RESOURCE_MONITOR = SDG_AI_WH_MONITOR;
 
-USE ROLE SECURITYADMIN;
+USE ROLE SYSADMIN;
 
 GRANT USAGE ON WAREHOUSE SDG_TRANSFORM_WH TO ROLE SDG_DATA_ANALYST;
 GRANT USAGE ON WAREHOUSE SDG_TRANSFORM_WH TO ROLE SDG_DATA_ENGINEER;
@@ -126,7 +126,12 @@ GRANT USAGE ON WAREHOUSE SDG_AI_WH        TO ROLE SDG_DATA_ENGINEER;
 --
 -- BRZ is organised by SOURCE. SLV is organised by SUBJECT. GLD by END CONSUMPTION.
 
+
 USE ROLE SYSADMIN;
+
+GRANT CREATE DATABASE ON ACCOUNT TO ROLE SDG_DATA_ENGINEER;
+
+USE ROLE SDG_DATA_ENGINEER;
 
 CREATE DATABASE IF NOT EXISTS SDG_BRZ        COMMENT = 'Bronze — raw landing, organised by source system';
 CREATE DATABASE IF NOT EXISTS SDG_SLV        COMMENT = 'Silver — cleaned and conformed, organised by subject';
@@ -159,6 +164,7 @@ CREATE SCHEMA IF NOT EXISTS SDG_SYS_CONFIG.SECURITY;
 
 
 USE ROLE SYSADMIN;
+
 GRANT USAGE ON DATABASE SDG_SYS_CONFIG                        TO ROLE SECURITYADMIN;
 GRANT USAGE ON SCHEMA   SDG_SYS_CONFIG.SECURITY               TO ROLE SECURITYADMIN;
 GRANT CREATE PASSWORD POLICY       ON SCHEMA SDG_SYS_CONFIG.SECURITY TO ROLE SECURITYADMIN;
@@ -196,7 +202,7 @@ CREATE AUTHENTICATION POLICY IF NOT EXISTS SDG_SYS_CONFIG.SECURITY.SERVICE_ACCOU
 -- ALL + FUTURE on every object class. FUTURE is what stops the "dbt created a
 -- new model and now the analyst can't see it" support ticket.
 
-USE ROLE SECURITYADMIN;
+USE ROLE SYSADMIN;
 
 -- ---- ANALYST: read-only across all three layers ----------------------------
 GRANT USAGE ON DATABASE SDG_BRZ TO ROLE SDG_DATA_ANALYST;
@@ -224,58 +230,18 @@ GRANT SELECT ON FUTURE VIEWS   IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ANALYST;
 GRANT SELECT ON FUTURE VIEWS   IN DATABASE SDG_SLV TO ROLE SDG_DATA_ANALYST;
 GRANT SELECT ON FUTURE VIEWS   IN DATABASE SDG_GLD TO ROLE SDG_DATA_ANALYST;
 
--- ---- ENGINEER: build rights (inherits all analyst reads) --------------------
-GRANT CREATE SCHEMA ON DATABASE SDG_BRZ        TO ROLE SDG_DATA_ENGINEER;
-GRANT CREATE SCHEMA ON DATABASE SDG_SLV        TO ROLE SDG_DATA_ENGINEER;
-GRANT CREATE SCHEMA ON DATABASE SDG_GLD        TO ROLE SDG_DATA_ENGINEER;
-GRANT CREATE SCHEMA ON DATABASE SDG_SYS_CONFIG TO ROLE SDG_DATA_ENGINEER;
-
-GRANT USAGE ON DATABASE SDG_SYS_CONFIG                  TO ROLE SDG_DATA_ENGINEER;
-GRANT USAGE ON ALL SCHEMAS    IN DATABASE SDG_SYS_CONFIG TO ROLE SDG_DATA_ENGINEER;
-GRANT USAGE ON FUTURE SCHEMAS IN DATABASE SDG_SYS_CONFIG TO ROLE SDG_DATA_ENGINEER;
-GRANT ALL   ON SCHEMA SDG_SYS_CONFIG.DBT                 TO ROLE SDG_DATA_ENGINEER;
-
-GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
-      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK
-    ON ALL SCHEMAS IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ENGINEER;
-GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
-      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK
-    ON ALL SCHEMAS IN DATABASE SDG_SLV TO ROLE SDG_DATA_ENGINEER;
-GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
-      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK,
-      CREATE SEMANTIC VIEW
-    ON ALL SCHEMAS IN DATABASE SDG_GLD TO ROLE SDG_DATA_ENGINEER;
-
-GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
-      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK
-    ON FUTURE SCHEMAS IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ENGINEER;
-GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
-      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK
-    ON FUTURE SCHEMAS IN DATABASE SDG_SLV TO ROLE SDG_DATA_ENGINEER;
-GRANT CREATE TABLE, CREATE VIEW, CREATE STAGE, CREATE FILE FORMAT,
-      CREATE PROCEDURE, CREATE FUNCTION, CREATE STREAM, CREATE TASK,
-      CREATE SEMANTIC VIEW
-    ON FUTURE SCHEMAS IN DATABASE SDG_GLD TO ROLE SDG_DATA_ENGINEER;
-
-GRANT INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES    IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ENGINEER;
-GRANT INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES    IN DATABASE SDG_SLV TO ROLE SDG_DATA_ENGINEER;
-GRANT INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES    IN DATABASE SDG_GLD TO ROLE SDG_DATA_ENGINEER;
-GRANT INSERT, UPDATE, DELETE, TRUNCATE ON FUTURE TABLES IN DATABASE SDG_BRZ TO ROLE SDG_DATA_ENGINEER;
-GRANT INSERT, UPDATE, DELETE, TRUNCATE ON FUTURE TABLES IN DATABASE SDG_SLV TO ROLE SDG_DATA_ENGINEER;
-GRANT INSERT, UPDATE, DELETE, TRUNCATE ON FUTURE TABLES IN DATABASE SDG_GLD TO ROLE SDG_DATA_ENGINEER;
-
--- ---- AI ANALYST: Gold only, plus semantic view references -------------------
+-- ---- AI ANALYST: Gold only, plus semantic view and agent access -------------
 GRANT USAGE  ON DATABASE SDG_GLD                                  TO ROLE SDG_AI_ANALYST;
 GRANT USAGE  ON SCHEMA   SDG_GLD.ANALYTICS                        TO ROLE SDG_AI_ANALYST;
 GRANT SELECT ON ALL TABLES    IN SCHEMA SDG_GLD.ANALYTICS         TO ROLE SDG_AI_ANALYST;
 GRANT SELECT ON FUTURE TABLES IN SCHEMA SDG_GLD.ANALYTICS         TO ROLE SDG_AI_ANALYST;
 
-USE ROLE ACCOUNTADMIN;
 GRANT REFERENCES, SELECT ON ALL SEMANTIC VIEWS    IN SCHEMA SDG_GLD.ANALYTICS TO ROLE SDG_AI_ANALYST;
 GRANT REFERENCES, SELECT ON FUTURE SEMANTIC VIEWS IN SCHEMA SDG_GLD.ANALYTICS TO ROLE SDG_AI_ANALYST;
 
 -- Cortex access. CORTEX_USER is granted to PUBLIC by default on most accounts,
 -- but grant it explicitly so the role is self-describing.
+USE ROLE ACCOUNTADMIN;
 GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE SDG_AI_ANALYST;
 GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE SDG_DATA_ENGINEER;
 
@@ -384,20 +350,6 @@ VALUES
     ('D002', 'Dr. Wei Chen', 'Endocrinology', 'Internal Medicine', '2019-07-01'),
     ('D003', 'Dr. Elena Lopez', 'Family Medicine', 'Primary Care', '2021-01-11');
 
--- Confirm the landing zone before handing off to dbt.
-SELECT 'SOURCE_A.RAW_APPOINTMENTS' AS table_name, COUNT(*) AS row_count, 50 AS expected
-  FROM SDG_BRZ.SOURCE_A.RAW_APPOINTMENTS
-UNION ALL
-SELECT 'SOURCE_B.RAW_DOCTORS', COUNT(*), 3
-  FROM SDG_BRZ.SOURCE_B.RAW_DOCTORS;
-
--- Optional: append later-dated rows here to demo the incremental in section 8.
--- INSERT INTO SDG_BRZ.SOURCE_A.RAW_APPOINTMENTS
---     (PATIENT_ID, PATIENT_NAME, DOCTOR_ID, APPOINTMENT_DATE, STATUS, NOTES)
--- VALUES
---     (1051, 'New Patient One', 'D001', '2024-02-03', 'completed', 'Routine follow-up'),
---     (1052, 'New Patient Two', 'D003', '2024-02-04', 'scheduled', 'New patient intake');
-
 
 -- ============================================================================
 -- 8. dbt PROJECT 
@@ -461,21 +413,6 @@ CREATE OR REPLACE SEMANTIC VIEW SDG_GLD.ANALYTICS.SDG_DOCTOR_PERFORMANCE
                  (specialty, department). Grain: one row per doctor_id.'
   )
 
-  DIMENSIONS (
-    doctor_metrics.doctor_id AS doctor_id
-      COMMENT = 'Provider identifier from the HR system. Format Dnnn.',
-    doctor_metrics.doctor_name AS doctor_name
-      WITH SYNONYMS = ('doctor', 'physician', 'provider', 'clinician', 'name')
-      COMMENT = 'Full display name of the attending provider, e.g. "Dr. Wei Chen".
-                 Use this when a user names a doctor.',
-    doctor_metrics.specialty AS specialty
-      WITH SYNONYMS = ('specialty', 'speciality', 'practice area')
-      COMMENT = 'Clinical specialty, e.g. Cardiology, Endocrinology, Family Medicine.',
-    doctor_metrics.department AS department
-      WITH SYNONYMS = ('department', 'division', 'service line')
-      COMMENT = 'Organisational department the provider reports into.'
-  )
-
   FACTS (
     doctor_metrics.total_appointments AS total_appointments
       COMMENT = 'COUNT (integer, not a rate): total appointments booked with this
@@ -501,6 +438,21 @@ CREATE OR REPLACE SEMANTIC VIEW SDG_GLD.ANALYTICS.SDG_DOCTOR_PERFORMANCE
     doctor_metrics.avg_appointments_per_day AS avg_appointments_per_day
       COMMENT = 'RATIO (not a percentage): total_appointments / active_days. A rough
                  daily workload indicator.'
+  )
+
+  DIMENSIONS (
+    doctor_metrics.doctor_id AS doctor_id
+      COMMENT = 'Provider identifier from the HR system. Format Dnnn.',
+    doctor_metrics.doctor_name AS doctor_name
+      WITH SYNONYMS = ('doctor', 'physician', 'provider', 'clinician', 'name')
+      COMMENT = 'Full display name of the attending provider, e.g. "Dr. Wei Chen".
+                 Use this when a user names a doctor.',
+    doctor_metrics.specialty AS specialty
+      WITH SYNONYMS = ('specialty', 'speciality', 'practice area')
+      COMMENT = 'Clinical specialty, e.g. Cardiology, Endocrinology, Family Medicine.',
+    doctor_metrics.department AS department
+      WITH SYNONYMS = ('department', 'division', 'service line')
+      COMMENT = 'Organisational department the provider reports into.'
   )
 
   METRICS (
@@ -539,6 +491,7 @@ SHOW SEMANTIC VIEWS IN SCHEMA SDG_GLD.ANALYTICS;
 -- The agent wraps the semantic view with orchestration and response behaviour.
 -- Registering it with Snowflake Intelligence gives a real chat surface instead
 -- of parsing JSON out of a worksheet.
+USE ROLE SDG_DATA_ENGINEER;
 
 CREATE OR REPLACE AGENT SDG_GLD.ANALYTICS.SDG_APPOINTMENT_ANALYST
   COMMENT = 'Answers natural language questions about provider appointment performance'
@@ -598,13 +551,16 @@ tool_resources:
     semantic_view: SDG_GLD.ANALYTICS.SDG_DOCTOR_PERFORMANCE
 $$;
 
--- Register with Snowflake Intelligence and grant to the consumption role.
+-- Register with Snowflake Intelligence (CoWork) and grant to the consumption role.
 USE ROLE ACCOUNTADMIN;
+CREATE SNOWFLAKE INTELLIGENCE IF NOT EXISTS SNOWFLAKE_INTELLIGENCE_OBJECT_DEFAULT;
 ALTER SNOWFLAKE INTELLIGENCE SNOWFLAKE_INTELLIGENCE_OBJECT_DEFAULT
     ADD AGENT SDG_GLD.ANALYTICS.SDG_APPOINTMENT_ANALYST;
 
 GRANT USAGE ON SNOWFLAKE INTELLIGENCE SNOWFLAKE_INTELLIGENCE_OBJECT_DEFAULT
     TO ROLE SDG_AI_ANALYST;
+
+USE ROLE SECURITYADMIN;
 GRANT USAGE ON AGENT SDG_GLD.ANALYTICS.SDG_APPOINTMENT_ANALYST
     TO ROLE SDG_AI_ANALYST;
 
@@ -617,6 +573,26 @@ SHOW AGENTS IN SCHEMA SDG_GLD.ANALYTICS;
 -- Switch to SDG_AI_ANALYST, open Snowflake Intelligence, pick
 -- SDG_APPOINTMENT_ANALYST, and ask these in order.
 --
+USE ROLE SDG_AI_ANALYST;
+USE WAREHOUSE SDG_AI_WH;
+
+SELECT TRY_PARSE_JSON(
+    SNOWFLAKE.CORTEX.DATA_AGENT_RUN(
+        'SDG_GLD.ANALYTICS.SDG_APPOINTMENT_ANALYST',
+        $${ "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Which doctor has the highest completion rate?" }] }] }$$
+    )
+) AS response;
+
+SELECT SNOWFLAKE.CORTEX.COMPLETE(
+    'llama3.1-70b',
+    'Which doctor has the highest completion rate?'
+);
+
+SELECT SNOWFLAKE.CORTEX.ANALYST(
+    'SDG_GLD.ANALYTICS.SDG_DOCTOR_PERFORMANCE',
+    'Which doctor has the highest completion rate?'
+);
+
 --   1. "Which doctor has the highest completion rate?"
 --        Warm-up. Confirms the agent resolves names and rates.
 --
@@ -648,20 +624,30 @@ SHOW AGENTS IN SCHEMA SDG_GLD.ANALYTICS;
 -- 12. GIT INTEGRATION  
 -- ============================================================================
 
-USE ROLE ACCOUNTADMIN;
-
+USE ROLE SDG_DATA_ENGINEER;
 CREATE SCHEMA IF NOT EXISTS SDG_SYS_CONFIG.SECRETS;
+
+USE ROLE ACCOUNTADMIN;
 
 CREATE SECRET IF NOT EXISTS SDG_SYS_CONFIG.SECRETS.SDG_GIT_SECRET
     TYPE     = PASSWORD
     USERNAME = 'dmacklin1'
     PASSWORD = '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'; -- fine-grained read-only to empty and public repo
 
-CREATE API INTEGRATION IF NOT EXISTS SDG_GIT_API
+USE ROLE ACCOUNTADMIN;
+CREATE OR REPLACE API INTEGRATION SDG_GIT_API
     API_PROVIDER = GIT_HTTPS_API
-    API_ALLOWED_PREFIXES = ('github.com/dmacklin1/SDG_SNOWFLAKE_DBT_DEMO/')
+    API_ALLOWED_PREFIXES = ('https://github.com/dmacklin1')
     ALLOWED_AUTHENTICATION_SECRETS = (SDG_SYS_CONFIG.SECRETS.SDG_GIT_SECRET)
     ENABLED = TRUE;
+
+-- Let SDG_DATA_ENGINEER use the integration and secret to create the repo.
+USE ROLE SECURITYADMIN;
+GRANT USAGE ON INTEGRATION SDG_GIT_API TO ROLE SDG_DATA_ENGINEER;
+GRANT USAGE ON SECRET SDG_SYS_CONFIG.SECRETS.SDG_GIT_SECRET TO ROLE SDG_DATA_ENGINEER;
+
+USE ROLE SDG_DATA_ENGINEER;
+USE WAREHOUSE SDG_TRANSFORM_WH;
 
 CREATE GIT REPOSITORY IF NOT EXISTS SDG_SYS_CONFIG.DBT.SDG_DEMO_REPO
     API_INTEGRATION = SDG_GIT_API
