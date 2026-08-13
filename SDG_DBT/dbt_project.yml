@@ -1,0 +1,36 @@
+name: 'sdg_flashtalk_demo'
+version: '1.0.0'
+profile: 'sdg_flashtalk_demo'
+
+model-paths:  ["models"]
+test-paths:   ["tests"]
+macro-paths:  ["macros"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# NOTE: no packages.yml by design. dbt deps requires external network access,
+# which is not available on Snowflake trial accounts.
+#
+# No seeds either. The two RAW_ landing tables are declared as sources in
+# models/slv/base/ and created by section 7 of SDG_DEMO_SETUP.sql.
+
+models:
+  sdg_flashtalk_demo:
+    slv:
+      +materialized: table
+      base:
+        +database: SDG_FLASHTALK_SLV
+        +schema: BASE
+      doctors:
+        +database: SDG_FLASHTALK_SLV
+        +schema: DOCTORS
+      appointments:
+        +database: SDG_FLASHTALK_SLV
+        +schema: APPOINTMENTS
+    gld:
+      +materialized: table
+      analytics:
+        +database: SDG_FLASHTALK_GLD
+        +schema: ANALYTICS

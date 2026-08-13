@@ -1,0 +1,10 @@
+version: 2
+
+models:
+  - name: slv_doctors
+    description: "Conformed provider dimension. The business definition of a doctor."
+    columns:
+      - name: doctor_id
+        tests: [not_null, unique]
+      - name: doctor_name
+        tests: [not_null]

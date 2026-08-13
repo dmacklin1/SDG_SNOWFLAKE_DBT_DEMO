@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: slv_appointments
+    description: "Cleaned and keyed appointment records, one row per source record."
+    columns:
+      - name: appointment_sk
+        tests: [not_null, unique]
+      - name: patient_id
+        tests: [not_null]
+      - name: doctor_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('slv_doctors')
+              field: doctor_id
+      - name: status
+        tests:
+          - accepted_values:
+              values: ['completed', 'cancelled', 'scheduled']

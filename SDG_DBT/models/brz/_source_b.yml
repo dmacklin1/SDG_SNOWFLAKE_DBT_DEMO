@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: source_b
+    description: "HR / credentialing landing zone. Populated by section 7 of SDG_FLASHTALK_DEMO_SETUP.sql."
+    database: SDG_FLASHTALK_BRZ
+    schema: SOURCE_B
+    tables:
+      - name: raw_doctors
+        description: "Raw provider reference data, untyped as landed."
+        loaded_at_field: _loaded_at
+        columns:
+          - name: doctor_id
+            tests: [not_null, unique]
+          - name: doctor_name
+            tests: [not_null]

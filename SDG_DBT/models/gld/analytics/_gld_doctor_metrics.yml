@@ -1,0 +1,16 @@
+version: 2
+
+models:
+  - name: gld_doctor_metrics
+    description: >
+      Provider-level appointment metrics. One row per doctor. Backs the
+      SDG_FLASHTALK_DOCTOR_PERFORMANCE semantic view and the SDG_FLASHTALK_APPOINTMENT_ANALYST agent.
+    columns:
+      - name: doctor_id
+        tests: [not_null, unique]
+      - name: doctor_name
+        tests: [not_null, unique]
+      - name: total_appointments
+        tests: [not_null]
+      - name: completion_rate_pct
+        tests: [not_null]

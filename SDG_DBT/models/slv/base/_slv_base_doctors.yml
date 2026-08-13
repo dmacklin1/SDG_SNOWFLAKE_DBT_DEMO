@@ -1,0 +1,16 @@
+version: 2
+
+models:
+  - name: slv_base_doctors
+    description: "Type-cast, cleaned provider records."
+    columns:
+      - name: doctor_id
+        tests: [not_null, unique]
+      - name: doctor_name
+        tests: [not_null]
+      - name: specialty
+        tests: [not_null]
+      - name: department
+        tests: [not_null]
+      - name: hire_date
+        tests: [not_null]

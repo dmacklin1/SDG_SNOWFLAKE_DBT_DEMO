@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: brz_appointments
+    description: "Bronze view over Source A. Types standardised, audit columns added."
+    columns:
+      - name: patient_id
+        tests: [not_null]
+      - name: doctor_id
+        tests: [not_null]
+      - name: status
+        tests:
+          - accepted_values:
+              values: ['completed', 'cancelled', 'scheduled']
+
+  - name: brz_doctors
+    description: "Bronze view over Source B. Types standardised, audit columns added."
+    columns:
+      - name: doctor_id
+        tests: [not_null, unique]

@@ -1,0 +1,16 @@
+version: 2
+
+models:
+  - name: slv_base_appointments
+    description: "Type-cast, cleaned appointment records, one row per source record, surrogate-keyed."
+    columns:
+      - name: appointment_sk
+        tests: [not_null, unique]
+      - name: patient_id
+        tests: [not_null]
+      - name: doctor_id
+        tests: [not_null]
+      - name: status
+        tests:
+          - accepted_values:
+              values: ['completed', 'cancelled', 'scheduled']

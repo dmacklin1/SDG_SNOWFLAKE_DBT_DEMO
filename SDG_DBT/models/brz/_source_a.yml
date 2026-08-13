@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: source_a
+    description: "Scheduling system landing zone. Populated by section 7 of SDG_FLASHTALK_DEMO_SETUP.sql."
+    database: SDG_FLASHTALK_BRZ
+    schema: SOURCE_A
+    tables:
+      - name: raw_appointments
+        description: "Raw appointment records, untyped as landed."
+        loaded_at_field: _loaded_at
+        columns:
+          - name: patient_id
+            tests: [not_null, unique]
+          - name: doctor_id
+            tests: [not_null]
+          - name: status
+            tests:
+              - accepted_values:
+                  values: ['completed', 'cancelled', 'scheduled']
