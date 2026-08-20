@@ -404,7 +404,7 @@ GRANT USAGE ON SNOWFLAKE INTELLIGENCE SNOWFLAKE_INTELLIGENCE_OBJECT_DEFAULT TO R
 USE ROLE SECURITYADMIN;
 GRANT USAGE ON AGENT SDG_FLASHTALK_GLD.ANALYTICS.SDG_FLASHTALK_APPOINTMENT_ANALYST TO ROLE SDG_FLASHTALK_AI_ANALYST;
 
--- I want to generate a streamlit app dashboard that give me all the information from the schema in an insighful way.
+--  I want to generate a streamlit app dashboard that gives me all the information from the schema in an insighful way.
 
 -- 11. DEMO QUERIES - Not possible on trial accounts
 -- Show me each clinician's practice area and their cancellation percentage.
