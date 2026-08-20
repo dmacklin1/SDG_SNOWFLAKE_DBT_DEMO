@@ -407,11 +407,9 @@ GRANT USAGE ON AGENT SDG_FLASHTALK_GLD.ANALYTICS.SDG_FLASHTALK_APPOINTMENT_ANALY
 -- I want to generate a streamlit app dashboard that give me all the information from the schema in an insighful way.
 
 -- 11. DEMO QUERIES - Not possible on trial accounts
---   1. "Which doctor has the highest completion rate?"
---   2. "What is our overall completion rate?"
---   3. "Compare workload across all three doctors."
---   4. "Which department has the most cancellations?"
---   5. "What was the trend in appointments over the last two years?"
+-- Show me each clinician's practice area and their cancellation percentage.
+-- Show a stacked bar chart of each doctor's appointments broken down by completed, cancelled, and scheduled.
+-- Show me a pie chart of how total appointments are distributed across doctors.
 
 -- 12. CLEANUP (run manually to tear down)
 /*USE ROLE ACCOUNTADMIN;
